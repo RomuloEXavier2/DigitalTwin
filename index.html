@@ -3,37 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Digital Twin NEXT - Rômulo</title>
+    <title>Digital Twin - NEXT 2026 Stable</title>
     <style>
-        body { margin: 0; padding: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #0a0a0a; }
+        body { margin: 0; padding: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #e0e0e0; }
         #canvas-container { width: 100vw; height: 100vh; }
         .ui-panel {
-            position: absolute;
-            background: rgba(0, 0, 0, 0.85);
-            color: #00ff88;
-            padding: 15px;
-            border-radius: 10px;
-            border: 1px solid #00ff88;
-            z-index: 10;
-            top: 20px;
-            right: 20px;
-            width: 220px;
-            box-shadow: 0 0 15px rgba(0, 255, 136, 0.2);
+            position: absolute; background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px); padding: 15px; border-radius: 12px;
+            z-index: 10; top: 20px; right: 20px; width: 200px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }
-        #status-fb { color: #888; font-size: 0.8em; display: block; margin-top: 5px; }
-        .data-label { color: #fff; font-weight: bold; }
+        .data-label { color: #d32f2f; font-weight: bold; }
     </style>
 </head>
 <body>
-
     <div id="canvas-container"></div>
-
     <div class="ui-panel">
-        <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid #333; padding-bottom: 5px;">Telemetria Digital Twin</h4>
-        <p>Temp. Motores: <span id="val-temp" class="data-label">--</span>°C</p>
-        <p>Inclinação MPU: <span id="val-inc" class="data-label">--</span>°</p>
-        <p>Nível Vibração: <span id="val-vib" class="data-label">--</span></p>
-        <small id="status-fb">Aguardando Firebase...</small>
+        <h4 style="margin:0 0 10px 0; font-size: 11px; color: #666; text-transform: uppercase;">Telemetria Digital</h4>
+        <div style="font-size: 14px; line-height: 1.6;">
+            Temp: <span id="val-temp" class="data-label">--</span>°C<br>
+            Eixo X: <span id="val-inc" class="data-label">--</span>°<br>
+            Eixo Y: <span id="val-inc2" class="data-label">--</span>°
+        </div>
     </div>
 
     <script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
@@ -53,29 +44,28 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-        // CONFIGURAÇÃO FIREBASE
         const firebaseConfig = {
             apiKey: "AIzaSyAkPuU0caKcpApNAII_gC5CxaBmGLXv_9Q",
             authDomain: "next2k26-1a3e7.firebaseapp.com",
             databaseURL: "https://next2k26-1a3e7-default-rtdb.firebaseio.com",
-            projectId: "next2k26-1a3e7",
-            storageBucket: "next2k26-1a3e7.firebasestorage.app",
-            appId: "1:254237100992:web:dd40cce731fa1dffc79625"
+            projectId: "next2k26-1a3e7"
         };
 
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
         let scene, camera, renderer, controls, model;
+        let targetX = 0, currentX = 0;
+        let targetY = 0, currentY = 0;
+        const SMOOTHING = 0.03; // Movimento "manteiga"
+
         let motores = [];
-        let aletaPeca, alertaSprite;
 
         init3D();
 
         function init3D() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x0a0a0a);
-
+            scene.background = new THREE.Color(0xdcdcdc);
             camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.position.set(8, 8, 8);
 
@@ -84,100 +74,57 @@
             renderer.setPixelRatio(window.devicePixelRatio);
             document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 1.5));
-            const spotlight = new THREE.SpotLight(0xffffff, 10);
-            spotlight.position.set(5, 15, 5);
-            scene.add(spotlight);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+            const sun = new THREE.DirectionalLight(0xffffff, 1);
+            sun.position.set(5, 10, 7);
+            scene.add(sun);
 
             controls = new OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
 
-            const loader = new GLTFLoader();
-            loader.load('modelo.glb', (gltf) => {
+            new GLTFLoader().load('modelo.glb', (gltf) => {
                 model = gltf.scene;
                 scene.add(model);
-
-                // Mapear as 4 instâncias dos motores
-                const nomesMotores = ['ServoMotor_ASSEM<1>', 'ServoMotor_ASSEM<2>', 'ServoMotor_ASSEM<3>', 'ServoMotor_ASSEM<4>'];
-                nomesMotores.forEach(nome => {
-                    const obj = model.getObjectByName(nome);
-                    if(obj) {
-                        obj.traverse(n => { if(n.isMesh) n.material = n.material.clone(); });
-                        motores.push(obj);
+                model.traverse((node) => {
+                    if (node.name.includes('ServoMotor_ASSEM')) {
+                        node.traverse(c => { if(c.isMesh) c.material = c.material.clone(); });
+                        motores.push(node);
                     }
                 });
-
-                aletaPeca = model.getObjectByName('aleta');
-                if(aletaPeca) aletaPeca.material = aletaPeca.material.clone();
-
                 conectarFirebase();
             });
-
             animate();
         }
 
         function conectarFirebase() {
-            document.getElementById('status-fb').innerText = "🟢 Sistema Sincronizado";
-
-            // 1. TEMPERATURA -> AFETA OS 4 MOTORES
+            onValue(ref(db, 'Inclinacao'), s => {
+                targetX = (s.val() || 0) * (Math.PI / 180);
+                document.getElementById('val-inc').innerText = s.val();
+            });
+            onValue(ref(db, 'Inclinacao2'), s => {
+                targetY = (s.val() * -1 || 0) * (Math.PI / 180);
+                document.getElementById('val-inc2').innerText = s.val();
+            });
             onValue(ref(db, 'Temperatura'), (snap) => {
-                const temp = snap.val() || 0;
-                document.getElementById('val-temp').innerText = temp;
-                const f = Math.min(Math.max((temp - 25) / 55, 0), 1);
+                const t = snap.val() || 0;
+                document.getElementById('val-temp').innerText = t.toFixed(2);
+                const f = Math.min(Math.max((t - 28) / 7, 0), 1);
                 motores.forEach(m => {
                     m.traverse(n => { if(n.isMesh) n.material.color.setRGB(1, 1-f, 1-f); });
                 });
             });
-
-            // 2. INCLINAÇÃO (MPU6050) -> GIRA O MODELO
-            onValue(ref(db, 'Inclinacao'), (snap) => {
-                const inc = snap.val() || 0;
-                document.getElementById('val-inc').innerText = inc;
-                if(model) {
-                    // Converte para radianos e aplica no eixo Z (ou X/Y conforme sua montagem)
-                    model.rotation.z = inc * (Math.PI / 180);
-                }
-            });
-
-            // 3. VIBRAÇÃO -> TREMOR NA ALETA + ÍCONE
-            onValue(ref(db, 'Vibracao'), (snap) => {
-                const vib = snap.val() || 0;
-                document.getElementById('val-vib').innerText = vib;
-                if(aletaPeca) {
-                    if(vib > 30) { // Limite para considerar vibração anormal
-                        gerarAlertaIcone(true);
-                    } else {
-                        gerarAlertaIcone(false);
-                    }
-                }
-            });
-        }
-
-        function gerarAlertaIcone(show) {
-            if (show && !alertaSprite) {
-                const map = new THREE.TextureLoader().load('https://img.icons8.com/color/96/warning-shield.png');
-                const mat = new THREE.SpriteMaterial({ map: map, depthTest: false });
-                alertaSprite = new THREE.Sprite(mat);
-                alertaSprite.scale.set(0.2, 0.2, 0.2); // Escala reduzida
-                alertaSprite.position.set(0, 0.3, 0); // Ajuste fino da posição sobre a aleta
-                aletaPeca.add(alertaSprite);
-            } else if (!show && alertaSprite) {
-                aletaPeca.remove(alertaSprite);
-                alertaSprite = null;
-            }
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            if(controls) controls.update();
+            controls.update();
 
-            // Se houver vibração alta, aplica o tremor no frame
-            const vibAtual = parseFloat(document.getElementById('val-vib').innerText);
-            if(aletaPeca && vibAtual > 30) {
-                aletaPeca.position.x = Math.sin(Date.now() * 0.1) * 0.01;
-                aletaPeca.position.y = Math.cos(Date.now() * 0.1) * 0.01;
-            } else if(aletaPeca) {
-                aletaPeca.position.set(0,0,0); // Volta ao repouso
+            currentX += (targetX - currentX) * SMOOTHING;
+            currentY += (targetY - currentY) * SMOOTHING;
+
+            if(model) {
+                model.rotation.z = currentX;
+                model.rotation.x = currentY;
             }
 
             renderer.render(scene, camera);
