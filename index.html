@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Digital Twin - NEXT 2026 Stable</title>
+    <title>Digital Twin - NEXT 2026 Pro</title>
     <style>
         body { margin: 0; padding: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #e0e0e0; }
         #canvas-container { width: 100vw; height: 100vh; }
         .ui-panel {
             position: absolute; background: rgba(255, 255, 255, 0.85);
             backdrop-filter: blur(10px); padding: 15px; border-radius: 12px;
-            z-index: 10; top: 20px; right: 20px; width: 200px;
+            z-index: 10; top: 20px; right: 20px; width: 210px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }
         .data-label { color: #d32f2f; font-weight: bold; }
@@ -57,8 +57,7 @@
         let scene, camera, renderer, controls, model;
         let targetX = 0, currentX = 0;
         let targetY = 0, currentY = 0;
-        const SMOOTHING = 0.03; // Movimento "manteiga"
-
+        const SMOOTHING = 0.04;
         let motores = [];
 
         init3D();
@@ -102,13 +101,16 @@
                 document.getElementById('val-inc').innerText = s.val();
             });
             onValue(ref(db, 'Inclinacao2'), s => {
+                // Inversão de eixo aplicada aqui
                 targetY = (s.val() * -1 || 0) * (Math.PI / 180);
                 document.getElementById('val-inc2').innerText = s.val();
             });
             onValue(ref(db, 'Temperatura'), (snap) => {
                 const t = snap.val() || 0;
-                document.getElementById('val-temp').innerText = t.toFixed(2);
-                const f = Math.min(Math.max((t - 28) / 7, 0), 1);
+                document.getElementById('val-temp').innerText = t.toFixed(1);
+
+                // Mapeamento Térmico (25°C a 100°C)
+                const f = Math.min(Math.max((t - 25) / 75, 0), 1);
                 motores.forEach(m => {
                     m.traverse(n => { if(n.isMesh) n.material.color.setRGB(1, 1-f, 1-f); });
                 });
@@ -119,6 +121,7 @@
             requestAnimationFrame(animate);
             controls.update();
 
+            // Interpolação Ultra-Smooth
             currentX += (targetX - currentX) * SMOOTHING;
             currentY += (targetY - currentY) * SMOOTHING;
 
