@@ -3,19 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Digital Twin AR - Fase 2</title>
+    <title>Digital Twin AR - Engenharia Pro</title>
     <style>
         body { margin: 0; padding: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
-        #canvas-container { width: 100vw; height: 100vh; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; }
 
         .ui-panel {
-            position: absolute; top: 20px; right: 20px; width: 220px;
-            background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(15px);
+            position: absolute; top: 20px; right: 20px; width: 240px;
+            background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(15px);
             color: white; padding: 20px; border-radius: 15px;
-            border: 1px solid rgba(255,255,255,0.1); z-index: 100;
+            border: 1px solid rgba(0, 255, 136, 0.4); z-index: 100;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
         }
-        .data-label { color: #00ff88; font-family: monospace; font-weight: bold; }
-        h4 { margin: 0 0 10px 0; font-size: 12px; letter-spacing: 2px; color: #aaa; }
+        .data-label { color: #00ff88; font-family: 'Courier New', monospace; font-weight: bold; }
+        .status-badge { font-size: 10px; padding: 3px 8px; border-radius: 5px; text-transform: uppercase; float: right; font-weight: bold; }
+        .ok { background: #00ff88; color: #000; }
+        .err { background: #ff4444; color: #fff; }
+
+        .btn-isolate {
+            width: 100%; margin-top: 15px; padding: 10px;
+            background: #00ff88; border: none; border-radius: 8px;
+            color: black; font-weight: bold; cursor: pointer;
+            transition: 0.3s; font-size: 12px;
+        }
+        .btn-isolate:hover { background: #00cc6e; transform: scale(1.02); }
+        .btn-reset { background: #444; color: white; margin-top: 5px; }
+
+        .instruction { font-size: 10px; color: #aaa; margin-top: 12px; line-height: 1.4; }
+        hr { border: 0; border-top: 1px solid #333; margin: 12px 0; }
     </style>
 </head>
 <body>
@@ -23,11 +38,24 @@
     <div id="canvas-container"></div>
 
     <div class="ui-panel">
-        <h4>SISTEMA AR ATIVO</h4>
+        <h4 style="margin:0 0 15px 0; font-size: 11px; letter-spacing: 2px; color: #00ff88;">CONTROLE DE ATIVOS AR</h4>
+        <div style="font-size: 12px; line-height: 2;">
+            STATUS: <span id="st-mod" class="status-badge err">OFF</span><br>
+            FIREBASE: <span id="st-fb" class="status-badge err">OFF</span>
+        </div>
+        <hr>
         <div style="font-size: 14px;">
             TEMP: <span id="val-temp" class="data-label">--</span>°C<br>
-            EIXO X: <span id="val-inc" class="data-label">--</span>°<br>
-            EIXO Y: <span id="val-inc2" class="data-label">--</span>°
+            EIXOS: <span id="val-inc" class="data-label">--</span>° / <span id="val-inc2" class="data-label">--</span>°
+        </div>
+
+        <button id="btn-isolate" class="btn-isolate">ISOLAR SELECIONADOS</button>
+        <button id="btn-reset" class="btn-isolate btn-reset">RESTAURAR MODELO</button>
+
+        <div class="instruction">
+            • <b>Clique:</b> Selecionar peça<br>
+            • <b>Ctrl + Clique:</b> Seleção múltipla<br>
+            • <b>Scroll:</b> Zoom | <b>Drag:</b> Girar
         </div>
     </div>
 
@@ -50,7 +78,6 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-        // Config Firebase (Mantido conforme anterior)
         const firebaseConfig = {
             apiKey: "AIzaSyAkPuU0caKcpApNAII_gC5CxaBmGLXv_9Q",
             authDomain: "next2k26-1a3e7.firebaseapp.com",
@@ -61,89 +88,160 @@
         const db = getDatabase(app);
 
         let scene, camera, renderer, controls, model;
-        let targetX = 0, currentX = 0;
-        let targetY = 0, currentY = 0;
-        const SMOOTHING = 0.03;
-
-        const video = document.getElementById('webcam');
+        let targetX = 0, currentX = 0, targetY = 0, currentY = 0;
+        let motores = [];
+        let selecionados = new Set();
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
 
         init();
 
         async function init() {
             scene = new THREE.Scene();
-
-            // Configurar Câmera
             camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(5, 5, 5);
+            camera.position.set(8, 8, 8);
 
-            // Configurar Renderer com suporte a transparência e PBR
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.toneMapping = THREE.ACESFilmicToneMapping; // Melhora o realismo das cores
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
             renderer.outputColorSpace = THREE.SRGBColorSpace;
             document.getElementById('canvas-container').appendChild(renderer.domElement);
 
             controls = new OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
 
-            // Luzes para o modelo 3D
-            const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
-            scene.add(ambientLight);
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
-            directionalLight.position.set(5, 10, 7);
-            scene.add(directionalLight);
+            scene.add(new THREE.AmbientLight(0xffffff, 1.8));
+            const light = new THREE.DirectionalLight(0xffffff, 2.0);
+            light.position.set(5, 10, 7);
+            scene.add(light);
 
-            // INICIAR WEBCAM (REALIDADE AUMENTADA)
+            // Webcam Background
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "environment", width: 1280, height: 720 }
-                });
+                const video = document.getElementById('webcam');
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
                 video.srcObject = stream;
-                video.play();
+                await video.play();
+                scene.background = new THREE.VideoTexture(video);
+            } catch (err) { console.warn("Camera indisponível"); }
 
-                const videoTexture = new THREE.VideoTexture(video);
-                videoTexture.colorSpace = THREE.SRGBColorSpace;
-                scene.background = videoTexture; // Define o vídeo como fundo da cena
-            } catch (err) {
-                console.error("Erro ao acessar webcam:", err);
-                scene.background = new THREE.Color(0x111111);
-            }
-
-            // Carregar Modelo .glb
-            const loader = new GLTFLoader();
-            loader.load('modelo.glb', (gltf) => {
+            // Loader
+            new GLTFLoader().load('./modelo.glb', (gltf) => {
                 model = gltf.scene;
+
+                // Normalização do modelo
+                const box = new THREE.Box3().setFromObject(model);
+                const center = box.getCenter(new THREE.Vector3());
+                model.position.sub(center);
                 scene.add(model);
 
-                // Aplicar Environment Map para reflexos reais (PBR)
-                const pmremGenerator = new THREE.PMREMGenerator(renderer);
-                scene.environment = pmremGenerator.fromScene(new THREE.Scene()).texture;
+                document.getElementById('st-mod').innerText = "LOADED";
+                document.getElementById('st-mod').className = "status-badge ok";
 
+                // Preparação das peças para interação individual
+                model.traverse(node => {
+                    if (node.isMesh) {
+                        // CLONAR material para cada mesh ser independente
+                        node.material = node.material.clone();
+                        node.userData.originalVisible = true;
+                    }
+                    if (node.name.includes('ServoMotor_ASSEM')) {
+                        motores.push(node);
+                    }
+                });
                 conectarFirebase();
             });
+
+            window.addEventListener('click', onSelect);
+            document.getElementById('btn-isolate').addEventListener('click', isolateSelected);
+            document.getElementById('btn-reset').addEventListener('click', resetModel);
 
             animate();
         }
 
+        function onSelect(event) {
+            if (event.target.closest('.ui-panel')) return;
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            // Intersectar apenas objetos visíveis para evitar selecionar o que está oculto
+            const intersects = raycaster.intersectObjects(model.children, true);
+
+            if (intersects.length > 0) {
+                // Pegar o MESH específico (o nível mais baixo da geometria)
+                const object = intersects[0].object;
+
+                // Se não segurar Ctrl, limpa a seleção anterior
+                if (!event.ctrlKey && !event.metaKey) {
+                    selecionados.forEach(obj => obj.material.emissive.setHex(0x000000));
+                    selecionados.clear();
+                }
+
+                if (selecionados.has(object)) {
+                    object.material.emissive.setHex(0x000000);
+                    selecionados.delete(object);
+                } else {
+                    object.material.emissive.setHex(0x00ff88);
+                    object.material.emissiveIntensity = 0.5;
+                    selecionados.add(object);
+                    console.log("Selecionado:", object.name);
+                }
+            } else if (!event.ctrlKey && !event.metaKey) {
+                // Clicar no vazio limpa seleção
+                resetSelectionHighlights();
+            }
+        }
+
+        function isolateSelected() {
+            if (selecionados.size === 0) return;
+
+            model.traverse(node => {
+                if (node.isMesh) {
+                    // Oculta se não estiver no Set de selecionados
+                    node.visible = selecionados.has(node);
+                }
+            });
+            resetSelectionHighlights();
+        }
+
+        function resetModel() {
+            model.traverse(node => {
+                if (node.isMesh) node.visible = true;
+            });
+            resetSelectionHighlights();
+        }
+
+        function resetSelectionHighlights() {
+            selecionados.forEach(obj => obj.material.emissive.setHex(0x000000));
+            selecionados.clear();
+        }
+
         function conectarFirebase() {
-            onValue(ref(db, 'Inclinacao'), s => { targetX = (s.val() || 0) * (Math.PI / 180); document.getElementById('val-inc').innerText = s.val(); });
+            onValue(ref(db, 'Inclinacao'), s => {
+                targetX = (s.val() || 0) * (Math.PI / 180);
+                document.getElementById('val-inc').innerText = s.val();
+                const fb = document.getElementById('st-fb');
+                fb.innerText = "CONNECTED"; fb.className = "status-badge ok";
+            });
             onValue(ref(db, 'Inclinacao2'), s => { targetY = (s.val() * -1 || 0) * (Math.PI / 180); document.getElementById('val-inc2').innerText = s.val(); });
-            onValue(ref(db, 'Temperatura'), s => { document.getElementById('val-temp').innerText = (s.val() || 0).toFixed(1); });
+            onValue(ref(db, 'Temperatura'), s => {
+                const t = s.val() || 25;
+                document.getElementById('val-temp').innerText = t.toFixed(1);
+                const f = Math.min(Math.max((t - 25) / 75, 0), 1);
+                motores.forEach(m => m.traverse(n => { if(n.isMesh) n.material.color.setRGB(1, 1-f, 1-f); }));
+            });
         }
 
         function animate() {
             requestAnimationFrame(animate);
             controls.update();
-
-            currentX += (targetX - currentX) * SMOOTHING;
-            currentY += (targetY - currentY) * SMOOTHING;
-
+            currentX += (targetX - currentX) * 0.04;
+            currentY += (targetY - currentY) * 0.04;
             if (model) {
                 model.rotation.z = currentX;
                 model.rotation.x = currentY;
             }
-
             renderer.render(scene, camera);
         }
 
