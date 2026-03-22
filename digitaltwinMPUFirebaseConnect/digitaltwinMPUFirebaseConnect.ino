@@ -6,9 +6,6 @@
 //    Core 0 (taskControle) — MPU6050 + PID + Servos  @ 100 Hz
 //    Core 1 (loop Arduino) — Firebase envia dados     @ ~13 Hz
 //
-//  WiFi e Firebase inicializados no setup() antes das tasks,
-//  evitando o erro SSL "Failed to initialize the SSL layer".
-//
 //  Pinos:
 //    MPU6050 SDA  -> GPIO 21
 //    MPU6050 SCL  -> GPIO 22
@@ -36,9 +33,9 @@
 
 // ─── Credenciais ──────────────────────────────────────────────────────────────
 #define WIFI_SSID       "Orquidea"
-#define WIFI_PASSWORD   "benigna99" // Coloque a senha da Orquidea aqui!
-#define DATABASE_URL  "https://next2k26-1a3e7-default-rtdb.firebaseio.com/"
-#define API_KEY       "AIzaSyAkPuU0caKcpApNAII_gC5CxaBmGLXv_9Q"
+#define WIFI_PASSWORD   "benigna99"
+#define DATABASE_URL    "https://next2k26-1a3e7-default-rtdb.firebaseio.com/"
+#define API_KEY         "AIzaSyAkPuU0caKcpApNAII_gC5CxaBmGLXv_9Q"
 
 // ─── Pinos ────────────────────────────────────────────────────────────────────
 #define PIN_SDA     21
@@ -53,19 +50,24 @@
 #define SERVO_MAX_DEV  20
 
 // ─── Parametros PID ───────────────────────────────────────────────────────────
-#define KP  1.8f
+#define KP  2.2f
 #define KI  0.04f
-#define KD  0.20f
+#define KD  0.40f
 
-#define OFFSET_AX  0.0f
-#define OFFSET_AY  0.0f
+// ─── Offset de montagem do sensor ────────────────────────────────────────────
+// O eixo X apresentava 15 graus de offset com o modelo nivelado.
+// Convertido para m/s2: 15 * (9.8 / 90) = 2.61 m/s2
+// Se ainda restar desvio apos gravar, ajuste em decimos ate zerar.
+#define OFFSET_AX   1.3f
+#define OFFSET_AY   0.0f
 
 #define INTEGRAL_MAX  15.0f
 
-// Slew rate — maximo de graus que cada servo pode mover por ciclo (10ms)
-// 2.0 graus/ciclo = 200 graus/s — suave e ainda responsivo
-// Aumente para resposta mais rapida, reduza para movimento mais lento
-#define SLEW_RATE  2.0f
+// ─── Movimento incremental dos servos ────────────────────────────────────────
+// O servo avanca 1 grau por vez a cada PASSO_MS milissegundos.
+// Exemplo: posicao 50 -> alvo 55 percorre 50,51,52,53,54,55 com 8ms entre cada passo.
+// Reduza PASSO_MS para movimento mais rapido, aumente para mais lento.
+#define PASSO_MS  8
 
 // ─── Timings ──────────────────────────────────────────────────────────────────
 #define PERIODO_CONTROLE_MS  10
@@ -137,6 +139,29 @@ PID pid_pitch = { KP, KI, KD };
 PID pid_roll  = { KP, KI, KD };
 
 // =============================================================================
+//  MOVIMENTO INCREMENTAL DO SERVO
+//  Move o servo 1 grau por vez com intervalo PASSO_MS entre cada passo.
+//  Nao bloqueia o loop — a cada chamada avanca no maximo 1 grau.
+// =============================================================================
+void moverServoIncremental(Servo &s, int &posAtual, int alvo) {
+    if (posAtual == alvo) return;
+
+    static unsigned long ultimoPasso = 0;
+    unsigned long agora = millis();
+
+    if (agora - ultimoPasso < PASSO_MS) return;
+    ultimoPasso = agora;
+
+    if (posAtual < alvo) posAtual++;
+    else                 posAtual--;
+
+    posAtual = constrain(posAtual,
+                         SERVO_NEUTRO - SERVO_MAX_DEV,
+                         SERVO_NEUTRO + SERVO_MAX_DEV);
+    s.write(posAtual);
+}
+
+// =============================================================================
 //  FUNCOES DOS SERVOS
 // =============================================================================
 void servoSeguro(Servo &s, int angulo) {
@@ -190,7 +215,7 @@ void verificacaoGDL() {
 
     delay(400);
 
-    Serial.println("[GDL]  Fase 2: S1 + S3 espelhados (Pitch) — 3 ciclos");
+    Serial.println("[GDL]  Fase 2: S1 + S3 espelhados (Pitch) - 3 ciclos");
     for (int ciclo = 0; ciclo < 3; ciclo++) {
         for (int d = 0; d <= SERVO_MAX_DEV; d++) {
             servo1.write(NEUTRO + d); servo3.write(NEUTRO - d); delay(VEL);
@@ -208,7 +233,7 @@ void verificacaoGDL() {
 
     delay(400);
 
-    Serial.println("[GDL]  Fase 3: S2 + S4 espelhados (Roll) — 3 ciclos");
+    Serial.println("[GDL]  Fase 3: S2 + S4 espelhados (Roll) - 3 ciclos");
     for (int ciclo = 0; ciclo < 3; ciclo++) {
         for (int d = 0; d <= SERVO_MAX_DEV; d++) {
             servo2.write(NEUTRO + d); servo4.write(NEUTRO - d); delay(VEL);
@@ -236,16 +261,15 @@ void verificacaoGDL() {
 //  TOKEN CALLBACK
 // =============================================================================
 void myTokenStatusCallback(TokenInfo info) {
-    if (info.status == token_status_error) {
+    if (info.status == token_status_error)
         Serial.printf("[FB]   Token erro: %s\n", info.error.message.c_str());
-    }
-    if (info.status == token_status_ready) {
+    if (info.status == token_status_ready)
         Serial.println("[FB]   Token pronto.");
-    }
 }
 
 // =============================================================================
-//  TASK DE CONTROLE — Core 0
+//  TASK DE CONTROLE - Core 0
+//  MPU6050 -> PID -> movimento incremental -> Servos
 // =============================================================================
 void taskControle(void *pvParameters) {
     Wire.begin(PIN_SDA, PIN_SCL);
@@ -258,66 +282,65 @@ void taskControle(void *pvParameters) {
     mpu.setGyroRange(MPU6050_RANGE_500_DEG);
     mpu.setFilterBandwidth(MPU6050_BAND_44_HZ);
     Serial.println("[CTRL] MPU6050 OK. Range: +-4g | Filtro: 44Hz.");
+    Serial.printf("[CTRL] Offset: ax=%.2f ay=%.2f\n", OFFSET_AX, OFFSET_AY);
 
     pid_pitch.reset();
     pid_roll.reset();
+
+    // Posicoes atuais dos servos - iniciam no neutro
+    int pos_s1 = SERVO_NEUTRO;
+    int pos_s2 = SERVO_NEUTRO;
+    int pos_s3 = SERVO_NEUTRO;
+    int pos_s4 = SERVO_NEUTRO;
 
     TickType_t xLastWake = xTaskGetTickCount();
     unsigned long t_log  = millis();
     uint32_t ciclos      = 0;
 
-    float pos_s1 = (float)SERVO_NEUTRO;
-    float pos_s2 = (float)SERVO_NEUTRO;
-    float pos_s3 = (float)SERVO_NEUTRO;
-    float pos_s4 = (float)SERVO_NEUTRO;
-
     while (true) {
         sensors_event_t a, g, t;
         mpu.getEvent(&a, &g, &t);
 
+        // Aplica offset de montagem
         float ax = a.acceleration.x - OFFSET_AX;
         float ay = a.acceleration.y - OFFSET_AY;
 
+        // PID calcula correcao em graus de deflexao
         float pitch_out = constrain(pid_pitch.compute(0.0f, ax),
                                     -(float)SERVO_MAX_DEV, (float)SERVO_MAX_DEV);
-        float roll_out  = constrain(pid_roll.compute(0.0f, ay),
+        float roll_out  = constrain(pid_roll.compute(0.0f,  ay),
                                     -(float)SERVO_MAX_DEV, (float)SERVO_MAX_DEV);
 
-        float alvo_s1 = (float)(SERVO_NEUTRO + (int)pitch_out);
-        float alvo_s2 = (float)(SERVO_NEUTRO + (int)roll_out);
-        float alvo_s3 = (float)(SERVO_NEUTRO - (int)pitch_out);
-        float alvo_s4 = (float)(SERVO_NEUTRO - (int)roll_out);
+        // Posicoes alvo do mixer de atitude
+        int alvo_s1 = constrain(SERVO_NEUTRO + (int)pitch_out,
+                                SERVO_NEUTRO - SERVO_MAX_DEV,
+                                SERVO_NEUTRO + SERVO_MAX_DEV);
+        int alvo_s2 = constrain(SERVO_NEUTRO + (int)roll_out,
+                                SERVO_NEUTRO - SERVO_MAX_DEV,
+                                SERVO_NEUTRO + SERVO_MAX_DEV);
+        int alvo_s3 = constrain(SERVO_NEUTRO - (int)pitch_out,
+                                SERVO_NEUTRO - SERVO_MAX_DEV,
+                                SERVO_NEUTRO + SERVO_MAX_DEV);
+        int alvo_s4 = constrain(SERVO_NEUTRO - (int)roll_out,
+                                SERVO_NEUTRO - SERVO_MAX_DEV,
+                                SERVO_NEUTRO + SERVO_MAX_DEV);
 
-        auto slew = [](float atual, float alvo, float rate) -> float {
-            float diff = alvo - atual;
-            if (fabsf(diff) <= rate) return alvo;
-            return atual + (diff > 0 ? rate : -rate);
-        };
+        // Movimento incremental: 1 grau por PASSO_MS — fluido e sem saltos
+        moverServoIncremental(servo1, pos_s1, alvo_s1);
+        moverServoIncremental(servo2, pos_s2, alvo_s2);
+        moverServoIncremental(servo3, pos_s3, alvo_s3);
+        moverServoIncremental(servo4, pos_s4, alvo_s4);
 
-        pos_s1 = slew(pos_s1, alvo_s1, SLEW_RATE);
-        pos_s2 = slew(pos_s2, alvo_s2, SLEW_RATE);
-        pos_s3 = slew(pos_s3, alvo_s3, SLEW_RATE);
-        pos_s4 = slew(pos_s4, alvo_s4, SLEW_RATE);
-
-        int s1 = (int)roundf(pos_s1);
-        int s2 = (int)roundf(pos_s2);
-        int s3 = (int)roundf(pos_s3);
-        int s4 = (int)roundf(pos_s4);
-
-        servoSeguro(servo1, s1);
-        servoSeguro(servo2, s2);
-        servoSeguro(servo3, s3);
-        servoSeguro(servo4, s4);
-
+        // Atualiza dados compartilhados com o Firebase
         if (xSemaphoreTake(xMutex, pdMS_TO_TICKS(2)) == pdTRUE) {
             dadosVoo.ax        = ax;
             dadosVoo.ay        = ay;
             dadosVoo.pitch_out = pitch_out;
             dadosVoo.roll_out  = roll_out;
-            dadosVoo.s1        = constrain(s1, SERVO_NEUTRO - SERVO_MAX_DEV, SERVO_NEUTRO + SERVO_MAX_DEV);
-            dadosVoo.s2        = constrain(s2, SERVO_NEUTRO - SERVO_MAX_DEV, SERVO_NEUTRO + SERVO_MAX_DEV);
-            dadosVoo.s3        = constrain(s3, SERVO_NEUTRO - SERVO_MAX_DEV, SERVO_NEUTRO + SERVO_MAX_DEV);
-            dadosVoo.s4        = constrain(s4, SERVO_NEUTRO - SERVO_MAX_DEV, SERVO_NEUTRO + SERVO_MAX_DEV);
+            dadosVoo.s1        = pos_s1;
+            dadosVoo.s2        = pos_s2;
+            dadosVoo.s3        = pos_s3;
+            dadosVoo.s4        = pos_s4;
             xSemaphoreGive(xMutex);
         }
 
@@ -326,7 +349,8 @@ void taskControle(void *pvParameters) {
         if (millis() - t_log >= 1000) {
             t_log = millis();
             Serial.printf("[CTRL] %uHz | ax=%.2f ay=%.2f | pitch=%.1f roll=%.1f | S:%d %d %d %d\n",
-                          ciclos, ax, ay, pitch_out, roll_out, s1, s2, s3, s4);
+                          ciclos, ax, ay, pitch_out, roll_out,
+                          pos_s1, pos_s2, pos_s3, pos_s4);
             ciclos = 0;
         }
 
@@ -369,7 +393,7 @@ void setup() {
     verificacaoGDL();
 
     Serial.println("─────────────────────────────────────────────");
-    Serial.printf( "[WiFi] Conectando a: %s\n", WIFI_SSID);
+    Serial.printf("[WiFi] Conectando a: %s\n", WIFI_SSID);
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
@@ -390,11 +414,11 @@ void setup() {
 
     {
         Serial.println("[FB]   Configurando...");
-        config.database_url              = DATABASE_URL;
-        config.api_key                   = API_KEY;
-        config.cert.data                 = nullptr;
-        config.token_status_callback     = myTokenStatusCallback;
-        config.timeout.serverResponse    = 10000;
+        config.database_url           = DATABASE_URL;
+        config.api_key                = API_KEY;
+        config.cert.data              = nullptr;
+        config.token_status_callback  = myTokenStatusCallback;
+        config.timeout.serverResponse = 10000;
 
         if (Firebase.signUp(&config, &auth, "", "")) {
             Serial.println("[FB]   OK: signUp concluido.");
