@@ -56,6 +56,18 @@
         }
         .badge-normal   { background: #333; color: #aaa; }
         .badge-inspecao { background: #00aaff; color: #000; }
+
+        /* painel de teste de eixo */
+        .eixo-row {
+            display: flex; gap: 4px; margin-top: 6px;
+        }
+        .btn-eixo {
+            flex: 1; padding: 5px 0; font-size: 10px; font-weight: bold;
+            border: 1px solid #555; border-radius: 5px;
+            background: #1a1a1a; color: #aaa; cursor: pointer; transition: 0.2s;
+        }
+        .btn-eixo:hover { border-color: #00aaff; color: #00aaff; }
+        .btn-eixo.sel { background: #00aaff; color: #000; border-color: #00aaff; }
     </style>
 </head>
 <body>
@@ -79,6 +91,16 @@
         <div class="aleta-row"><span>S2 Roll+</span> <span id="val-s2" class="aleta-val">90°</span></div>
         <div class="aleta-row"><span>S3 Pitch-</span><span id="val-s3" class="aleta-val">90°</span></div>
         <div class="aleta-row"><span>S4 Roll-</span> <span id="val-s4" class="aleta-val">90°</span></div>
+
+        <!-- Seletor de eixo para S1 -->
+        <div style="font-size: 9px; color:#aaa; margin-top:10px;">EIXO DA S1 (teste):</div>
+        <div class="eixo-row">
+            <button class="btn-eixo" id="eixo-x" onclick="setEixoS1('x')">X</button>
+            <button class="btn-eixo sel" id="eixo-y" onclick="setEixoS1('y')">Y</button>
+            <button class="btn-eixo" id="eixo-z" onclick="setEixoS1('z')">Z</button>
+            <button class="btn-eixo" id="eixo--x" onclick="setEixoS1('-x')">-X</button>
+            <button class="btn-eixo" id="eixo--z" onclick="setEixoS1('-z')">-Z</button>
+        </div>
 
         <button id="btn-isolate" class="btn-isolate">ISOLAR SELECIONADOS</button>
         <button id="btn-reset"   class="btn-isolate btn-reset">RESTAURAR MODELO</button>
@@ -117,7 +139,6 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-        // ─── Firebase ─────────────────────────────────────────────────────────
         const firebaseConfig = {
             apiKey:      "AIzaSyAkPuU0caKcpApNAII_gC5CxaBmGLXv_9Q",
             authDomain:  "next2k26-1a3e7.firebaseapp.com",
@@ -127,33 +148,31 @@
         const app = initializeApp(firebaseConfig);
         const db  = getDatabase(app);
 
-        // ─── Estado da cena ───────────────────────────────────────────────────
         let scene, camera, renderer, controls, model;
-
         let targetX = 0, currentX = 0;
         let targetY = 0, currentY = 0;
 
-        // Aletas: ângulo alvo e atual em radianos
-        // Mapeamento: (servoGrau - 90) * PI/180
-        // 90° → 0 rad (neutro), 110° → +0.35 rad, 70° → -0.35 rad
-        const aletas = {
-            s1: { node: null, target: 0, current: 0 },
-            s2: { node: null, target: 0, current: 0 },
-            s3: { node: null, target: 0, current: 0 },
-            s4: { node: null, target: 0, current: 0 },
+        // Mapeamento nó do modelo → chave Firebase
+        // aleta<1> recebe s4, aleta<4> recebe s1 (opostas no modelo)
+        const mapeamentoAletas = {
+            1: 's4',
+            2: 's2',
+            3: 's3',
+            4: 's1',
         };
 
-        // Suavização da interpolação das aletas (0.05 = lento, 0.15 = rápido)
+        // Cada aleta tem seu próprio eixo de rotação
+        // s1 começa em 'y' mas pode ser trocado pelo seletor no painel
+        const aletas = {
+            s1: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
+            s2: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
+            s3: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
+            s4: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
+        };
+
         const LERP_ALETA = 0.08;
 
-        // Eixo local de rotação das aletas.
-        // As aletas estão a 90° em relação à base (verticais), giram em torno do eixo Y local.
-        // Se a rotação parecer incorreta após testar, troque para 'x' ou 'z'.
-        const EIXO_ALETA = 'y';
-
-        // Modo inspeção: quando true, congela a rotação do modelo pelo MPU
-        // As aletas continuam animando normalmente
-        let modoInspecao = false;
+        let modoInspecao  = false;
         let rotCongeladaX = 0, rotCongeladaY = 0;
 
         let motores      = [];
@@ -161,12 +180,37 @@
         const raycaster  = new THREE.Raycaster();
         const mouse      = new THREE.Vector2();
 
-        // ─── Conversão servo graus → radianos centrados no neutro ─────────────
+        // Expõe função ao escopo global para os botões onclick do HTML
+        window.setEixoS1 = function(opcao) {
+            // Atualiza eixo e sinal da s1
+            // opcao pode ser 'x', 'y', 'z', '-x', '-z'
+            const negativo = opcao.startsWith('-');
+            const eixo     = negativo ? opcao[1] : opcao;
+
+            aletas.s1.eixo  = eixo;
+            aletas.s1.sinal = negativo ? -1 : 1;
+
+            // Zera a rotação atual nos 3 eixos para evitar resíduo
+            if (aletas.s1.node) {
+                aletas.s1.node.rotation.x = 0;
+                aletas.s1.node.rotation.y = 0;
+                aletas.s1.node.rotation.z = 0;
+            }
+            aletas.s1.current = 0;
+
+            // Atualiza visual dos botões
+            ['x','y','z','-x','-z'].forEach(id => {
+                const btn = document.getElementById('eixo-' + id);
+                if (btn) btn.classList.toggle('sel', id === opcao);
+            });
+
+            console.log(`S1 eixo alterado para: ${opcao}`);
+        };
+
         function servoParaRad(graus) {
             return (graus - 90) * (Math.PI / 180);
         }
 
-        // ─── Init ─────────────────────────────────────────────────────────────
         init();
 
         async function init() {
@@ -188,7 +232,6 @@
             light.position.set(5, 10, 7);
             scene.add(light);
 
-            // Webcam Background
             try {
                 const video  = document.getElementById('webcam');
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
@@ -197,7 +240,6 @@
                 scene.background = new THREE.VideoTexture(video);
             } catch (err) { console.warn("Câmera indisponível"); }
 
-            // Carrega o modelo
             new GLTFLoader().load('./modelo.glb', (gltf) => {
                 model = gltf.scene;
 
@@ -209,39 +251,33 @@
                 document.getElementById('st-mod').innerText = "LOADED";
                 document.getElementById('st-mod').className = "status-badge ok";
 
-                // Mapeia os nós do modelo
                 model.traverse(node => {
                     if (node.isMesh) {
                         node.material = node.material.clone();
                         node.userData.originalVisible = true;
                     }
 
-                    // Servomotores (coloridos por temperatura)
                     if (node.name.includes('ServoMotor_ASSEM')) {
                         motores.push(node);
                     }
 
-                    // Aletas — nomeadas como aleta<1>, aleta<2>, aleta<3>, aleta<4>
                     const nomeLower = node.name.toLowerCase();
                     if (nomeLower.includes('aleta')) {
                         const match = node.name.match(/(\d+)/);
                         if (match) {
-                            const chave = 's' + parseInt(match[1]);
-                            if (aletas[chave] !== undefined) {
-                                aletas[chave].node = node;
-                                console.log(`Aleta mapeada: ${node.name} → ${chave} (tipo: ${node.type})`);
+                            const idxModelo     = parseInt(match[1]);
+                            const chaveFirebase = mapeamentoAletas[idxModelo];
+                            if (chaveFirebase && aletas[chaveFirebase] !== undefined) {
+                                aletas[chaveFirebase].node = node;
+                                console.log(`Aleta mapeada: ${node.name} → ${chaveFirebase}`);
                             }
                         }
                     }
                 });
 
-                // Confirma mapeamento no console
                 ['s1','s2','s3','s4'].forEach(k => {
-                    if (aletas[k].node) {
-                        console.log(`${k}: OK — ${aletas[k].node.name}`);
-                    } else {
-                        console.warn(`${k}: NÃO encontrado no modelo!`);
-                    }
+                    if (aletas[k].node) console.log(`${k}: OK — ${aletas[k].node.name}`);
+                    else                console.warn(`${k}: NÃO encontrado!`);
                 });
 
                 conectarFirebase();
@@ -255,27 +291,21 @@
             animate();
         }
 
-        // ─── Modo inspeção ────────────────────────────────────────────────────
         function toggleInspecao() {
             modoInspecao = !modoInspecao;
-
             const btn   = document.getElementById('btn-inspecao');
             const badge = document.getElementById('badge-modo');
 
             if (modoInspecao) {
-                // Salva a rotação atual ao congelar
                 rotCongeladaX = currentX;
                 rotCongeladaY = currentY;
-
                 btn.innerText = 'VOLTAR AO NORMAL';
                 btn.classList.add('ativo');
                 badge.innerText = 'INSPEÇÃO';
                 badge.className = 'badge-modo badge-inspecao';
             } else {
-                // Ao sair, sincroniza currentX/Y com os alvos para evitar salto brusco
                 currentX = targetX;
                 currentY = targetY;
-
                 btn.innerText = 'INSPECIONAR ALETAS';
                 btn.classList.remove('ativo');
                 badge.innerText = 'NORMAL';
@@ -283,9 +313,7 @@
             }
         }
 
-        // ─── Firebase ─────────────────────────────────────────────────────────
         function conectarFirebase() {
-
             onValue(ref(db, 'Inclinacao'), s => {
                 targetX = (s.val() || 0) * (Math.PI / 180);
                 document.getElementById('val-inc').innerText = s.val();
@@ -307,28 +335,22 @@
                 }));
             });
 
-            // Aletas — lê /Aletas/s1, s2, s3, s4
-            ['s1', 's2', 's3', 's4'].forEach(chave => {
+            ['s1','s2','s3','s4'].forEach(chave => {
                 onValue(ref(db, 'Aletas/' + chave), snapshot => {
                     const graus = snapshot.val();
                     if (graus === null || graus === undefined) return;
-
                     aletas[chave].target = servoParaRad(graus);
-
                     const display = document.getElementById('val-' + chave);
                     if (display) display.innerText = graus + '°';
                 });
             });
         }
 
-        // ─── Loop de animação ─────────────────────────────────────────────────
         function animate() {
             requestAnimationFrame(animate);
             controls.update();
 
             if (model) {
-                // Inclinação do modelo (MPU)
-                // Em modo inspeção a rotação fica congelada na posição salva
                 if (!modoInspecao) {
                     currentX += (targetX - currentX) * 0.04;
                     currentY += (targetY - currentY) * 0.04;
@@ -339,19 +361,18 @@
                     model.rotation.x = rotCongeladaY;
                 }
 
-                // Rotação suave das aletas — sempre ativa independente do modo
-                ['s1', 's2', 's3', 's4'].forEach(chave => {
+                ['s1','s2','s3','s4'].forEach(chave => {
                     const a = aletas[chave];
                     if (!a.node) return;
                     a.current += (a.target - a.current) * LERP_ALETA;
-                    a.node.rotation[EIXO_ALETA] = a.current;
+                    // Aplica no eixo correto com o sinal correto
+                    a.node.rotation[a.eixo] = a.current * a.sinal;
                 });
             }
 
             renderer.render(scene, camera);
         }
 
-        // ─── Seleção de peças ─────────────────────────────────────────────────
         function onSelect(event) {
             if (event.target.closest('.ui-panel')) return;
 
@@ -363,12 +384,10 @@
 
             if (intersects.length > 0) {
                 const object = intersects[0].object;
-
                 if (!event.ctrlKey && !event.metaKey) {
                     selecionados.forEach(obj => obj.material.emissive.setHex(0x000000));
                     selecionados.clear();
                 }
-
                 if (selecionados.has(object)) {
                     object.material.emissive.setHex(0x000000);
                     selecionados.delete(object);
