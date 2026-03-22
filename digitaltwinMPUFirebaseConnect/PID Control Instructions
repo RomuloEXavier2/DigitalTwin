@@ -1,0 +1,30 @@
+KP — Proporcional — "o quão forte reage ao erro agora"
+É o músculo principal. Quanto maior o KP, mais agressiva é a correção imediata. Se o modelo inclinar 10°, um KP alto vai mover as aletas muito mais do que um KP baixo.
+
+KP baixo → aletas quase não se mexem, modelo cai sem corrigir
+KP alto → aletas reagem forte e rápido
+KP alto demais → oscilação — as aletas ficam batendo de um lado pro outro sem parar, como um carro que vira rápido demais e fica ziguezagueando
+
+Comece aqui. Sobe de 1 em 1 até as aletas responderem visivelmente.
+
+KD — Derivativo — "o freio da correção"
+Ele olha para a velocidade de mudança do erro. Se o modelo está se inclinando rápido, o KD aplica uma força contrária para desacelerar antes de chegar no limite. É o amortecedor.
+
+KD baixo → modelo corrige mas ultrapassa o ponto neutro e oscila
+KD alto → suaviza o movimento, para de oscilar
+KD alto demais → reação lenta demais, parece que as aletas "tremem" com ruído do sensor
+
+Se depois de ajustar o KP as aletas ficarem oscilando, sobe o KD até parar.
+
+KI — Integral — "corrige a deriva lenta"
+Ele acumula o erro ao longo do tempo. Se o modelo ficar levemente inclinado por vários segundos sem corrigir completamente — uma deriva lenta que o KP sozinho não resolve — o KI percebe e aumenta a correção gradualmente até zerar.
+
+KI baixo → modelo pode ficar com um leve desvio constante para um lado
+KI alto → corrige a deriva mas pode causar windup — a aleta vai para o limite e demora para voltar
+KI alto demais → instabilidade lenta, o modelo oscila em ciclos longos
+
+Mexa por último e em passos pequenos (0.01 de cada vez).
+
+Resumo prático para o IGNIS VECTOR:
+SintomaSoluçãoAletas quase não se mexemAumenta KPAletas oscilam rápido (tremem)Aumenta KDModelo deriva lentamente para um ladoAumenta KI levementeModelo ultrapassa o neutro e balançaAumenta KDAletas vão ao limite e não voltamReduz KISistema instável em geralReduz KP 30% e começa de novo
+Ordem de ajuste recomendada: KP primeiro → KD depois → KI por último.
