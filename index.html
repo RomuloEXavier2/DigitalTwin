@@ -17,7 +17,7 @@
         }
         .data-label { color: #00ff88; font-family: 'Courier New', monospace; font-weight: bold; }
         .status-badge { font-size: 10px; padding: 3px 8px; border-radius: 5px; text-transform: uppercase; float: right; font-weight: bold; }
-        .ok { background: #00ff88; color: #000; }
+        .ok  { background: #00ff88; color: #000; }
         .err { background: #ff4444; color: #fff; }
 
         .btn-isolate {
@@ -31,6 +31,13 @@
 
         .instruction { font-size: 10px; color: #aaa; margin-top: 12px; line-height: 1.4; }
         hr { border: 0; border-top: 1px solid #333; margin: 12px 0; }
+
+        .aleta-row {
+            display: flex; justify-content: space-between;
+            font-size: 11px; font-family: 'Courier New', monospace;
+            line-height: 1.9;
+        }
+        .aleta-val { color: #00ff88; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -48,9 +55,15 @@
             TEMP: <span id="val-temp" class="data-label">--</span>°C<br>
             EIXOS: <span id="val-inc" class="data-label">--</span>° / <span id="val-inc2" class="data-label">--</span>°
         </div>
+        <hr>
+        <div style="font-size: 10px; letter-spacing: 1px; color:#aaa; margin-bottom:6px;">ALETAS (graus servo)</div>
+        <div class="aleta-row"><span>S1 Pitch+</span><span id="val-s1" class="aleta-val">90°</span></div>
+        <div class="aleta-row"><span>S2 Roll+</span> <span id="val-s2" class="aleta-val">90°</span></div>
+        <div class="aleta-row"><span>S3 Pitch-</span><span id="val-s3" class="aleta-val">90°</span></div>
+        <div class="aleta-row"><span>S4 Roll-</span> <span id="val-s4" class="aleta-val">90°</span></div>
 
         <button id="btn-isolate" class="btn-isolate">ISOLAR SELECIONADOS</button>
-        <button id="btn-reset" class="btn-isolate btn-reset">RESTAURAR MODELO</button>
+        <button id="btn-reset"   class="btn-isolate btn-reset">RESTAURAR MODELO</button>
 
         <div class="instruction">
             • <b>Clique:</b> Selecionar peça<br>
@@ -73,27 +86,56 @@
 
     <script type="module">
         import * as THREE from 'three';
-        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
+        // ─── Firebase ─────────────────────────────────────────────────────────
         const firebaseConfig = {
-            apiKey: "AIzaSyAkPuU0caKcpApNAII_gC5CxaBmGLXv_9Q",
-            authDomain: "next2k26-1a3e7.firebaseapp.com",
+            apiKey:      "AIzaSyAkPuU0caKcpApNAII_gC5CxaBmGLXv_9Q",
+            authDomain:  "next2k26-1a3e7.firebaseapp.com",
             databaseURL: "https://next2k26-1a3e7-default-rtdb.firebaseio.com",
-            projectId: "next2k26-1a3e7"
+            projectId:   "next2k26-1a3e7"
         };
         const app = initializeApp(firebaseConfig);
-        const db = getDatabase(app);
+        const db  = getDatabase(app);
 
+        // ─── Estado da cena ───────────────────────────────────────────────────
         let scene, camera, renderer, controls, model;
-        let targetX = 0, currentX = 0, targetY = 0, currentY = 0;
-        let motores = [];
-        let selecionados = new Set();
-        let raycaster = new THREE.Raycaster();
-        let mouse = new THREE.Vector2();
 
+        let targetX = 0, currentX = 0;
+        let targetY = 0, currentY = 0;
+
+        // Aletas: ângulo alvo e atual em radianos
+        // Mapeamento: (servoGrau - 90) * PI/180
+        // 90° → 0 rad (neutro), 110° → +0.35 rad, 70° → -0.35 rad
+        const aletas = {
+            s1: { node: null, target: 0, current: 0 },
+            s2: { node: null, target: 0, current: 0 },
+            s3: { node: null, target: 0, current: 0 },
+            s4: { node: null, target: 0, current: 0 },
+        };
+
+        // Suavização da interpolação das aletas (0.05 = lento, 0.15 = rápido)
+        const LERP_ALETA = 0.08;
+
+        // Eixo local de rotação das aletas.
+        // As aletas estão a 90° em relação à base (verticais), giram em torno do eixo Y local.
+        // Se a rotação parecer incorreta após testar, troque para 'x' ou 'z'.
+        const EIXO_ALETA = 'y';
+
+        let motores      = [];
+        let selecionados = new Set();
+        const raycaster  = new THREE.Raycaster();
+        const mouse      = new THREE.Vector2();
+
+        // ─── Conversão servo graus → radianos centrados no neutro ─────────────
+        function servoParaRad(graus) {
+            return (graus - 90) * (Math.PI / 180);
+        }
+
+        // ─── Init ─────────────────────────────────────────────────────────────
         init();
 
         async function init() {
@@ -117,19 +159,18 @@
 
             // Webcam Background
             try {
-                const video = document.getElementById('webcam');
+                const video  = document.getElementById('webcam');
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
                 video.srcObject = stream;
                 await video.play();
                 scene.background = new THREE.VideoTexture(video);
-            } catch (err) { console.warn("Camera indisponível"); }
+            } catch (err) { console.warn("Câmera indisponível"); }
 
-            // Loader
+            // Carrega o modelo
             new GLTFLoader().load('./modelo.glb', (gltf) => {
                 model = gltf.scene;
 
-                // Normalização do modelo
-                const box = new THREE.Box3().setFromObject(model);
+                const box    = new THREE.Box3().setFromObject(model);
                 const center = box.getCenter(new THREE.Vector3());
                 model.position.sub(center);
                 scene.add(model);
@@ -137,17 +178,41 @@
                 document.getElementById('st-mod').innerText = "LOADED";
                 document.getElementById('st-mod').className = "status-badge ok";
 
-                // Preparação das peças para interação individual
+                // Mapeia os nós do modelo
                 model.traverse(node => {
                     if (node.isMesh) {
-                        // CLONAR material para cada mesh ser independente
                         node.material = node.material.clone();
                         node.userData.originalVisible = true;
                     }
+
+                    // Servomotores (coloridos por temperatura)
                     if (node.name.includes('ServoMotor_ASSEM')) {
                         motores.push(node);
                     }
+
+                    // Aletas — nomeadas como aleta<1>, aleta<2>, aleta<3>, aleta<4>
+                    const nomeLower = node.name.toLowerCase();
+                    if (nomeLower.includes('aleta')) {
+                        const match = node.name.match(/(\d+)/);
+                        if (match) {
+                            const chave = 's' + parseInt(match[1]);
+                            if (aletas[chave] !== undefined) {
+                                aletas[chave].node = node;
+                                console.log(`Aleta mapeada: ${node.name} → ${chave} (tipo: ${node.type})`);
+                            }
+                        }
+                    }
                 });
+
+                // Confirma mapeamento no console
+                ['s1','s2','s3','s4'].forEach(k => {
+                    if (aletas[k].node) {
+                        console.log(`${k}: OK — ${aletas[k].node.name}`);
+                    } else {
+                        console.warn(`${k}: NÃO encontrado no modelo!`);
+                    }
+                });
+
                 conectarFirebase();
             });
 
@@ -158,21 +223,81 @@
             animate();
         }
 
+        // ─── Firebase ─────────────────────────────────────────────────────────
+        function conectarFirebase() {
+
+            onValue(ref(db, 'Inclinacao'), s => {
+                targetX = (s.val() || 0) * (Math.PI / 180);
+                document.getElementById('val-inc').innerText = s.val();
+                const fb = document.getElementById('st-fb');
+                fb.innerText = "CONNECTED"; fb.className = "status-badge ok";
+            });
+
+            onValue(ref(db, 'Inclinacao2'), s => {
+                targetY = ((s.val() * -1) || 0) * (Math.PI / 180);
+                document.getElementById('val-inc2').innerText = s.val();
+            });
+
+            onValue(ref(db, 'Temperatura'), s => {
+                const t = s.val() || 25;
+                document.getElementById('val-temp').innerText = t.toFixed(1);
+                const f = Math.min(Math.max((t - 25) / 75, 0), 1);
+                motores.forEach(m => m.traverse(n => {
+                    if (n.isMesh) n.material.color.setRGB(1, 1 - f, 1 - f);
+                }));
+            });
+
+            // Aletas — lê /Aletas/s1, s2, s3, s4
+            ['s1', 's2', 's3', 's4'].forEach(chave => {
+                onValue(ref(db, 'Aletas/' + chave), snapshot => {
+                    const graus = snapshot.val();
+                    if (graus === null || graus === undefined) return;
+
+                    aletas[chave].target = servoParaRad(graus);
+
+                    const display = document.getElementById('val-' + chave);
+                    if (display) display.innerText = graus + '°';
+                });
+            });
+        }
+
+        // ─── Loop de animação ─────────────────────────────────────────────────
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            if (model) {
+                // Inclinação do modelo (MPU)
+                currentX += (targetX - currentX) * 0.04;
+                currentY += (targetY - currentY) * 0.04;
+                model.rotation.z = currentX;
+                model.rotation.x = currentY;
+
+                // Rotação suave das aletas
+                ['s1', 's2', 's3', 's4'].forEach(chave => {
+                    const a = aletas[chave];
+                    if (!a.node) return;
+                    a.current += (a.target - a.current) * LERP_ALETA;
+                    a.node.rotation[EIXO_ALETA] = a.current;
+                });
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // ─── Seleção de peças ─────────────────────────────────────────────────
         function onSelect(event) {
             if (event.target.closest('.ui-panel')) return;
 
-            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.x =  (event.clientX / window.innerWidth)  * 2 - 1;
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
             raycaster.setFromCamera(mouse, camera);
-            // Intersectar apenas objetos visíveis para evitar selecionar o que está oculto
             const intersects = raycaster.intersectObjects(model.children, true);
 
             if (intersects.length > 0) {
-                // Pegar o MESH específico (o nível mais baixo da geometria)
                 const object = intersects[0].object;
 
-                // Se não segurar Ctrl, limpa a seleção anterior
                 if (!event.ctrlKey && !event.metaKey) {
                     selecionados.forEach(obj => obj.material.emissive.setHex(0x000000));
                     selecionados.clear();
@@ -188,61 +313,26 @@
                     console.log("Selecionado:", object.name);
                 }
             } else if (!event.ctrlKey && !event.metaKey) {
-                // Clicar no vazio limpa seleção
                 resetSelectionHighlights();
             }
         }
 
         function isolateSelected() {
             if (selecionados.size === 0) return;
-
             model.traverse(node => {
-                if (node.isMesh) {
-                    // Oculta se não estiver no Set de selecionados
-                    node.visible = selecionados.has(node);
-                }
+                if (node.isMesh) node.visible = selecionados.has(node);
             });
             resetSelectionHighlights();
         }
 
         function resetModel() {
-            model.traverse(node => {
-                if (node.isMesh) node.visible = true;
-            });
+            model.traverse(node => { if (node.isMesh) node.visible = true; });
             resetSelectionHighlights();
         }
 
         function resetSelectionHighlights() {
             selecionados.forEach(obj => obj.material.emissive.setHex(0x000000));
             selecionados.clear();
-        }
-
-        function conectarFirebase() {
-            onValue(ref(db, 'Inclinacao'), s => {
-                targetX = (s.val() || 0) * (Math.PI / 180);
-                document.getElementById('val-inc').innerText = s.val();
-                const fb = document.getElementById('st-fb');
-                fb.innerText = "CONNECTED"; fb.className = "status-badge ok";
-            });
-            onValue(ref(db, 'Inclinacao2'), s => { targetY = (s.val() * -1 || 0) * (Math.PI / 180); document.getElementById('val-inc2').innerText = s.val(); });
-            onValue(ref(db, 'Temperatura'), s => {
-                const t = s.val() || 25;
-                document.getElementById('val-temp').innerText = t.toFixed(1);
-                const f = Math.min(Math.max((t - 25) / 75, 0), 1);
-                motores.forEach(m => m.traverse(n => { if(n.isMesh) n.material.color.setRGB(1, 1-f, 1-f); }));
-            });
-        }
-
-        function animate() {
-            requestAnimationFrame(animate);
-            controls.update();
-            currentX += (targetX - currentX) * 0.04;
-            currentY += (targetY - currentY) * 0.04;
-            if (model) {
-                model.rotation.z = currentX;
-                model.rotation.x = currentY;
-            }
-            renderer.render(scene, camera);
         }
 
         window.addEventListener('resize', () => {
@@ -253,3 +343,15 @@
     </script>
 </body>
 </html>
+```
+
+Lembra de abrir o console do navegador (F12) depois de carregar — ele vai mostrar algo assim se tudo correu bem:
+```
+Aleta mapeada: aleta<1> → s1 (tipo: Mesh)
+Aleta mapeada: aleta<2> → s2 (tipo: Mesh)
+Aleta mapeada: aleta<3> → s3 (tipo: Mesh)
+Aleta mapeada: aleta<4> → s4 (tipo: Mesh)
+s1: OK — aleta<1>
+s2: OK — aleta<2>
+s3: OK — aleta<3>
+s4: OK — aleta<4>
