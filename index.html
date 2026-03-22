@@ -38,6 +38,24 @@
             line-height: 1.9;
         }
         .aleta-val { color: #00ff88; font-weight: bold; }
+
+        .btn-inspecao {
+            width: 100%; margin-top: 8px; padding: 10px;
+            background: #1a1a2e; border: 1px solid #00aaff;
+            border-radius: 8px; color: #00aaff; font-weight: bold;
+            cursor: pointer; transition: 0.3s; font-size: 12px;
+        }
+        .btn-inspecao:hover { background: #00aaff; color: #000; transform: scale(1.02); }
+        .btn-inspecao.ativo {
+            background: #00aaff; color: #000;
+            box-shadow: 0 0 12px rgba(0,170,255,0.6);
+        }
+        .badge-modo {
+            font-size: 9px; padding: 2px 7px; border-radius: 4px;
+            font-weight: bold; text-transform: uppercase; margin-left: 6px;
+        }
+        .badge-normal   { background: #333; color: #aaa; }
+        .badge-inspecao { background: #00aaff; color: #000; }
     </style>
 </head>
 <body>
@@ -64,6 +82,14 @@
 
         <button id="btn-isolate" class="btn-isolate">ISOLAR SELECIONADOS</button>
         <button id="btn-reset"   class="btn-isolate btn-reset">RESTAURAR MODELO</button>
+        <hr>
+        <div style="font-size: 10px; letter-spacing: 1px; color:#aaa; margin-bottom:4px;">
+            MODO ROTAÇÃO <span id="badge-modo" class="badge-modo badge-normal">NORMAL</span>
+        </div>
+        <button id="btn-inspecao" class="btn-inspecao">INSPECIONAR ALETAS</button>
+        <div style="font-size: 9px; color:#666; margin-top:5px; line-height:1.4;">
+            Congela rotação do MPU.<br>Veja apenas o movimento das aletas.
+        </div>
 
         <div class="instruction">
             • <b>Clique:</b> Selecionar peça<br>
@@ -124,6 +150,11 @@
         // As aletas estão a 90° em relação à base (verticais), giram em torno do eixo Y local.
         // Se a rotação parecer incorreta após testar, troque para 'x' ou 'z'.
         const EIXO_ALETA = 'y';
+
+        // Modo inspeção: quando true, congela a rotação do modelo pelo MPU
+        // As aletas continuam animando normalmente
+        let modoInspecao = false;
+        let rotCongeladaX = 0, rotCongeladaY = 0;
 
         let motores      = [];
         let selecionados = new Set();
@@ -219,8 +250,37 @@
             window.addEventListener('click', onSelect);
             document.getElementById('btn-isolate').addEventListener('click', isolateSelected);
             document.getElementById('btn-reset').addEventListener('click', resetModel);
+            document.getElementById('btn-inspecao').addEventListener('click', toggleInspecao);
 
             animate();
+        }
+
+        // ─── Modo inspeção ────────────────────────────────────────────────────
+        function toggleInspecao() {
+            modoInspecao = !modoInspecao;
+
+            const btn   = document.getElementById('btn-inspecao');
+            const badge = document.getElementById('badge-modo');
+
+            if (modoInspecao) {
+                // Salva a rotação atual ao congelar
+                rotCongeladaX = currentX;
+                rotCongeladaY = currentY;
+
+                btn.innerText = 'VOLTAR AO NORMAL';
+                btn.classList.add('ativo');
+                badge.innerText = 'INSPEÇÃO';
+                badge.className = 'badge-modo badge-inspecao';
+            } else {
+                // Ao sair, sincroniza currentX/Y com os alvos para evitar salto brusco
+                currentX = targetX;
+                currentY = targetY;
+
+                btn.innerText = 'INSPECIONAR ALETAS';
+                btn.classList.remove('ativo');
+                badge.innerText = 'NORMAL';
+                badge.className = 'badge-modo badge-normal';
+            }
         }
 
         // ─── Firebase ─────────────────────────────────────────────────────────
@@ -268,12 +328,18 @@
 
             if (model) {
                 // Inclinação do modelo (MPU)
-                currentX += (targetX - currentX) * 0.04;
-                currentY += (targetY - currentY) * 0.04;
-                model.rotation.z = currentX;
-                model.rotation.x = currentY;
+                // Em modo inspeção a rotação fica congelada na posição salva
+                if (!modoInspecao) {
+                    currentX += (targetX - currentX) * 0.04;
+                    currentY += (targetY - currentY) * 0.04;
+                    model.rotation.z = currentX;
+                    model.rotation.x = currentY;
+                } else {
+                    model.rotation.z = rotCongeladaX;
+                    model.rotation.x = rotCongeladaY;
+                }
 
-                // Rotação suave das aletas
+                // Rotação suave das aletas — sempre ativa independente do modo
                 ['s1', 's2', 's3', 's4'].forEach(chave => {
                     const a = aletas[chave];
                     if (!a.node) return;
@@ -343,15 +409,3 @@
     </script>
 </body>
 </html>
-```
-
-Lembra de abrir o console do navegador (F12) depois de carregar — ele vai mostrar algo assim se tudo correu bem:
-```
-Aleta mapeada: aleta<1> → s1 (tipo: Mesh)
-Aleta mapeada: aleta<2> → s2 (tipo: Mesh)
-Aleta mapeada: aleta<3> → s3 (tipo: Mesh)
-Aleta mapeada: aleta<4> → s4 (tipo: Mesh)
-s1: OK — aleta<1>
-s2: OK — aleta<2>
-s3: OK — aleta<3>
-s4: OK — aleta<4>
