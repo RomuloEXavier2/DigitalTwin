@@ -57,7 +57,6 @@
         .badge-normal   { background: #333; color: #aaa; }
         .badge-inspecao { background: #00aaff; color: #000; }
 
-        /* painel de teste de eixo */
         .eixo-row {
             display: flex; gap: 4px; margin-top: 6px;
         }
@@ -92,14 +91,14 @@
         <div class="aleta-row"><span>S3 Pitch-</span><span id="val-s3" class="aleta-val">90°</span></div>
         <div class="aleta-row"><span>S4 Roll-</span> <span id="val-s4" class="aleta-val">90°</span></div>
 
-        <!-- Seletor de eixo para S1 -->
+        <!-- Seletor de eixo para S1 — remover quando eixo correto for confirmado -->
         <div style="font-size: 9px; color:#aaa; margin-top:10px;">EIXO DA S1 (teste):</div>
         <div class="eixo-row">
-            <button class="btn-eixo" id="eixo-x" onclick="setEixoS1('x')">X</button>
-            <button class="btn-eixo sel" id="eixo-y" onclick="setEixoS1('y')">Y</button>
-            <button class="btn-eixo" id="eixo-z" onclick="setEixoS1('z')">Z</button>
-            <button class="btn-eixo" id="eixo--x" onclick="setEixoS1('-x')">-X</button>
-            <button class="btn-eixo" id="eixo--z" onclick="setEixoS1('-z')">-Z</button>
+            <button class="btn-eixo sel" id="eixo-x"  onclick="setEixoS1('x')">X</button>
+            <button class="btn-eixo"     id="eixo-y"  onclick="setEixoS1('y')">Y</button>
+            <button class="btn-eixo"     id="eixo-z"  onclick="setEixoS1('z')">Z</button>
+            <button class="btn-eixo"     id="eixo--x" onclick="setEixoS1('-x')">-X</button>
+            <button class="btn-eixo"     id="eixo--z" onclick="setEixoS1('-z')">-Z</button>
         </div>
 
         <button id="btn-isolate" class="btn-isolate">ISOLAR SELECIONADOS</button>
@@ -153,58 +152,48 @@
         let targetY = 0, currentY = 0;
 
         // Mapeamento nó do modelo → chave Firebase
-        // aleta<1> recebe s4, aleta<4> recebe s1 (opostas no modelo)
+        // Ajuste aqui se alguma aleta ainda ficar na posição errada
         const mapeamentoAletas = {
-            1: 's4',
+            1: 's1',
             2: 's2',
             3: 's3',
-            4: 's1',
+            4: 's4',
         };
 
-        // Cada aleta tem seu próprio eixo de rotação
-        // s1 começa em 'y' mas pode ser trocado pelo seletor no painel
+        // S1 usa eixo 'x' — ela aponta horizontalmente para fora do modelo
+        // S2, S3, S4 usam eixo 'y' — orientação padrão das demais aletas
         const aletas = {
-            s1: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
+            s1: { node: null, target: 0, current: 0, eixo: 'x', sinal: 1 },
             s2: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
             s3: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
             s4: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
         };
 
         const LERP_ALETA = 0.08;
-
         let modoInspecao  = false;
         let rotCongeladaX = 0, rotCongeladaY = 0;
+        let motores       = [];
+        let selecionados  = new Set();
+        const raycaster   = new THREE.Raycaster();
+        const mouse       = new THREE.Vector2();
 
-        let motores      = [];
-        let selecionados = new Set();
-        const raycaster  = new THREE.Raycaster();
-        const mouse      = new THREE.Vector2();
-
-        // Expõe função ao escopo global para os botões onclick do HTML
+        // Seletor de eixo da S1 exposto globalmente para os botões onclick
         window.setEixoS1 = function(opcao) {
-            // Atualiza eixo e sinal da s1
-            // opcao pode ser 'x', 'y', 'z', '-x', '-z'
             const negativo = opcao.startsWith('-');
             const eixo     = negativo ? opcao[1] : opcao;
-
             aletas.s1.eixo  = eixo;
             aletas.s1.sinal = negativo ? -1 : 1;
-
-            // Zera a rotação atual nos 3 eixos para evitar resíduo
             if (aletas.s1.node) {
                 aletas.s1.node.rotation.x = 0;
                 aletas.s1.node.rotation.y = 0;
                 aletas.s1.node.rotation.z = 0;
             }
             aletas.s1.current = 0;
-
-            // Atualiza visual dos botões
             ['x','y','z','-x','-z'].forEach(id => {
                 const btn = document.getElementById('eixo-' + id);
                 if (btn) btn.classList.toggle('sel', id === opcao);
             });
-
-            console.log(`S1 eixo alterado para: ${opcao}`);
+            console.log(`S1 eixo: ${opcao}`);
         };
 
         function servoParaRad(graus) {
@@ -242,7 +231,6 @@
 
             new GLTFLoader().load('./modelo.glb', (gltf) => {
                 model = gltf.scene;
-
                 const box    = new THREE.Box3().setFromObject(model);
                 const center = box.getCenter(new THREE.Vector3());
                 model.position.sub(center);
@@ -256,11 +244,9 @@
                         node.material = node.material.clone();
                         node.userData.originalVisible = true;
                     }
-
                     if (node.name.includes('ServoMotor_ASSEM')) {
                         motores.push(node);
                     }
-
                     const nomeLower = node.name.toLowerCase();
                     if (nomeLower.includes('aleta')) {
                         const match = node.name.match(/(\d+)/);
@@ -287,7 +273,6 @@
             document.getElementById('btn-isolate').addEventListener('click', isolateSelected);
             document.getElementById('btn-reset').addEventListener('click', resetModel);
             document.getElementById('btn-inspecao').addEventListener('click', toggleInspecao);
-
             animate();
         }
 
@@ -295,7 +280,6 @@
             modoInspecao = !modoInspecao;
             const btn   = document.getElementById('btn-inspecao');
             const badge = document.getElementById('badge-modo');
-
             if (modoInspecao) {
                 rotCongeladaX = currentX;
                 rotCongeladaY = currentY;
@@ -320,12 +304,10 @@
                 const fb = document.getElementById('st-fb');
                 fb.innerText = "CONNECTED"; fb.className = "status-badge ok";
             });
-
             onValue(ref(db, 'Inclinacao2'), s => {
                 targetY = ((s.val() * -1) || 0) * (Math.PI / 180);
                 document.getElementById('val-inc2').innerText = s.val();
             });
-
             onValue(ref(db, 'Temperatura'), s => {
                 const t = s.val() || 25;
                 document.getElementById('val-temp').innerText = t.toFixed(1);
@@ -334,7 +316,6 @@
                     if (n.isMesh) n.material.color.setRGB(1, 1 - f, 1 - f);
                 }));
             });
-
             ['s1','s2','s3','s4'].forEach(chave => {
                 onValue(ref(db, 'Aletas/' + chave), snapshot => {
                     const graus = snapshot.val();
@@ -349,7 +330,6 @@
         function animate() {
             requestAnimationFrame(animate);
             controls.update();
-
             if (model) {
                 if (!modoInspecao) {
                     currentX += (targetX - currentX) * 0.04;
@@ -360,28 +340,22 @@
                     model.rotation.z = rotCongeladaX;
                     model.rotation.x = rotCongeladaY;
                 }
-
                 ['s1','s2','s3','s4'].forEach(chave => {
                     const a = aletas[chave];
                     if (!a.node) return;
                     a.current += (a.target - a.current) * LERP_ALETA;
-                    // Aplica no eixo correto com o sinal correto
                     a.node.rotation[a.eixo] = a.current * a.sinal;
                 });
             }
-
             renderer.render(scene, camera);
         }
 
         function onSelect(event) {
             if (event.target.closest('.ui-panel')) return;
-
             mouse.x =  (event.clientX / window.innerWidth)  * 2 - 1;
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
             raycaster.setFromCamera(mouse, camera);
             const intersects = raycaster.intersectObjects(model.children, true);
-
             if (intersects.length > 0) {
                 const object = intersects[0].object;
                 if (!event.ctrlKey && !event.metaKey) {
