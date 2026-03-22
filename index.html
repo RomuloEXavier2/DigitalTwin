@@ -91,12 +91,12 @@
         <div class="aleta-row"><span>S3 Pitch-</span><span id="val-s3" class="aleta-val">90°</span></div>
         <div class="aleta-row"><span>S4 Roll-</span> <span id="val-s4" class="aleta-val">90°</span></div>
 
-        <!-- Seletor de eixo para S1 — remover quando eixo correto for confirmado -->
+        <!-- Seletor de eixo S1 — remover quando confirmado -->
         <div style="font-size: 9px; color:#aaa; margin-top:10px;">EIXO DA S1 (teste):</div>
         <div class="eixo-row">
-            <button class="btn-eixo sel" id="eixo-x"  onclick="setEixoS1('x')">X</button>
+            <button class="btn-eixo"     id="eixo-x"  onclick="setEixoS1('x')">X</button>
             <button class="btn-eixo"     id="eixo-y"  onclick="setEixoS1('y')">Y</button>
-            <button class="btn-eixo"     id="eixo-z"  onclick="setEixoS1('z')">Z</button>
+            <button class="btn-eixo sel" id="eixo-z"  onclick="setEixoS1('z')">Z</button>
             <button class="btn-eixo"     id="eixo--x" onclick="setEixoS1('-x')">-X</button>
             <button class="btn-eixo"     id="eixo--z" onclick="setEixoS1('-z')">-Z</button>
         </div>
@@ -151,25 +151,31 @@
         let targetX = 0, currentX = 0;
         let targetY = 0, currentY = 0;
 
+        // Layout em cruz (vista de cima):
+        //        S1 (topo)
+        //   S2 --+-- S4
+        //        S3 (base)
+        //
         // Mapeamento nó do modelo → chave Firebase
-        // Ajuste aqui se alguma aleta ainda ficar na posição errada
+        // Ajuste os índices se alguma aleta ainda aparecer fora de lugar
         const mapeamentoAletas = {
-            1: 's1',
-            2: 's2',
-            3: 's3',
-            4: 's4',
+            1: 's1',   // topo
+            2: 's2',   // esquerda
+            3: 's3',   // base
+            4: 's4',   // direita
         };
 
-        // S1 usa eixo 'x' — ela aponta horizontalmente para fora do modelo
-        // S2, S3, S4 usam eixo 'y' — orientação padrão das demais aletas
+        // S1 e S3 apontam no eixo Z do modelo → giram em torno de 'z'
+        // S2 e S4 apontam no eixo X do modelo → giram em torno de 'x'
+        // sinal: 1 = normal, -1 = invertido
         const aletas = {
-            s1: { node: null, target: 0, current: 0, eixo: 'x', sinal: 1 },
-            s2: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
-            s3: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
-            s4: { node: null, target: 0, current: 0, eixo: 'y', sinal: 1 },
+            s1: { node: null, target: 0, current: 0, eixo: 'z', sinal:  1 },
+            s2: { node: null, target: 0, current: 0, eixo: 'x', sinal:  1 },
+            s3: { node: null, target: 0, current: 0, eixo: 'z', sinal:  1 },
+            s4: { node: null, target: 0, current: 0, eixo: 'x', sinal:  1 },
         };
 
-        const LERP_ALETA = 0.08;
+        const LERP_ALETA  = 0.08;
         let modoInspecao  = false;
         let rotCongeladaX = 0, rotCongeladaY = 0;
         let motores       = [];
@@ -177,10 +183,10 @@
         const raycaster   = new THREE.Raycaster();
         const mouse       = new THREE.Vector2();
 
-        // Seletor de eixo da S1 exposto globalmente para os botões onclick
+        // Seletor de eixo da S1 — exposto globalmente para os botões onclick
         window.setEixoS1 = function(opcao) {
-            const negativo = opcao.startsWith('-');
-            const eixo     = negativo ? opcao[1] : opcao;
+            const negativo     = opcao.startsWith('-');
+            const eixo         = negativo ? opcao[1] : opcao;
             aletas.s1.eixo  = eixo;
             aletas.s1.sinal = negativo ? -1 : 1;
             if (aletas.s1.node) {
@@ -255,7 +261,7 @@
                             const chaveFirebase = mapeamentoAletas[idxModelo];
                             if (chaveFirebase && aletas[chaveFirebase] !== undefined) {
                                 aletas[chaveFirebase].node = node;
-                                console.log(`Aleta mapeada: ${node.name} → ${chaveFirebase}`);
+                                console.log(`Aleta mapeada: ${node.name} → ${chaveFirebase} (eixo: ${aletas[chaveFirebase].eixo})`);
                             }
                         }
                     }
